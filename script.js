@@ -1,19 +1,12 @@
 import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm"
-import { openai_url, gemini_url, token, setupAPI} from './api-config.js';
+import { openai_url, token, setupAPI} from './api-config.js';
 import { initializeMindmap, generateFinalmapData, generateExpertMindmapWithLLM, updateMindmapData, updateCurrentQuestion } from './mindmap-handlers.js';
 import { getExperts, generateExpertQuestions, getExpertAnswers, generateExpertSummary, generateFinalAnswer, updateExpertsData } from './experts.js';
+import { loadAvailableFiles, renderFileButtons, getSelectedFiles } from './file-selector.js';
+import { extractPdfData, extractExcelData, extractCsvData, extractDocxData, extractedData, sheetData } from './file-extractors.js';
 
-// Initialize mindmap handlers once DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    initializeMindmap({
-        container: document.getElementById('jsmind_container'),
-        viewMindmapBtn: document.getElementById('viewMindmapBtn'),
-        mindmapModal: document.getElementById('mindmapModal')
-    });
-});
 const pyodideWorker = new Worker("./pyworker.js", { type: "module" });
 const marked = new Marked();
-
 // DOM Elements
 const questionForm = document.getElementById("questionForm");
 const questionInput = document.getElementById("questionInput");
@@ -22,69 +15,79 @@ const loadingMessage = document.getElementById("loadingMessage");
 const errorAlert = document.getElementById("errorAlert");
 const errorMessage = document.getElementById("errorMessage");
 const expertsContainer = document.getElementById("expertsContainer");
-const fileInput = document.getElementById("fileInput");
+const fileSelector = document.getElementById("fileSelector");
 const fileInfo = document.getElementById("fileInfo");
-const fileName = document.getElementById("fileName");
-const fileList = document.getElementById("fileList");
+const selectedFilesCount = document.getElementById("selectedFilesCount");
 const chatContainer = document.getElementById("chatContainer");
 const followupContainer = document.getElementById("followupContainer");
 const viewAllDataBtn = document.getElementById("viewAllDataBtn");
 const downloadCsvBtn = document.getElementById("downloadCsv");
 const downloadXlsxBtn = document.getElementById("downloadXlsx");
+const processFilesBtn = document.getElementById("processFilesBtn");
 const mainContent = document.getElementById('mainContent');
 const apiForm = document.getElementById('apiForm');
 let currentAnalysisData = null;
 let currentQuestion = null;
 
-let sheetData=[];
 // Store conversation history
 let conversationHistory = [];
-
-// Store extracted data from files
-let extractedData = {
-  pdfs: [],
-  excel: [],
-  csv: [],
-  docx: [],
-};
 
 
 // Initialize API configuration
 setupAPI(apiForm, mainContent);
 
-// Function to get appropriate icon class based on file type
-const getFileIcon = (filename) => {
-  const icons = {
-    xlsx: "spreadsheet text-success",
-    xls: "spreadsheet text-success",
-    csv: "text text-success",
-    pdf: "pdf text-danger",
-    doc: "word text-primary",
-    docx: "word text-primary",
-  };
-  return `bi bi-file-earmark-${
-    icons[filename.split(".").pop().toLowerCase()] || "text"
-  }`;
-};
+// Initialize application once DOM is loaded
+document.addEventListener('DOMContentLoaded', async () => {
+  // Initialize mindmap
+  initializeMindmap({
+      container: document.getElementById('jsmind_container'),
+      viewMindmapBtn: document.getElementById('viewMindmapBtn'),
+      mindmapModal: document.getElementById('mindmapModal')
+  });
+
+  // Load files and setup selection observer
+  try {
+      renderFileButtons(await loadAvailableFiles(), fileSelector);
+      new MutationObserver(() => {
+          const count = getSelectedFiles().length;
+          processFilesBtn.disabled = !count;
+          selectedFilesCount.textContent = `${count} file${count !== 1 ? 's' : ''} selected`;
+          fileInfo.classList.toggle('hidden', !count);
+      }).observe(fileSelector, { subtree: true, attributes: true });
+  } catch (error) {
+      showError('Error loading available files: ' + error.message);
+  }
+});
 
 // Function to format extracted data from all file types
 function formatExtractedData() {
     const fileTypes = {
-        pdfs: { prefix: 'PDF', needsStringify: false },
-        excel: { prefix: 'Excel', needsStringify: true },
-        csv: { prefix: 'CSV', needsStringify: true },
-        docx: { prefix: 'DOCX', needsStringify: false }
+        pdfs: { prefix: 'PDF', formatter: content => content },
+        excel: { prefix: 'Excel', formatter: content => {
+            return content.map(sheet => {
+                const headers = sheet.headers.join('\t');
+                const rows = sheet.data.map(row => Object.keys(row).map(key => row[key] || '').join('\t')).join('\n');
+                return `Sheet: ${sheet.sheetName}\n${headers}\n${rows}`;
+            }).join('\n\n');
+        }},
+        csv: { prefix: 'CSV', formatter: content => content.map(sheet => {
+            const headers = sheet.headers.join('\t');
+            const rows = sheet.data.map(row => sheet.headers.map(h => row[h] || '').join('\t')).join('\n');
+            return `Sheet: ${sheet.sheetName}\n${headers}\n${rows}`;
+        }).join('\n\n') },
+        docx: { prefix: 'DOCX', formatter: content => content }
     };
 
     return Object.entries(fileTypes)
-        .map(([type, { prefix, needsStringify }]) => {
+        .map(([type, { prefix, formatter }]) => {
             return extractedData[type]
                 .map(file => {
-                    const content = needsStringify ? JSON.stringify(file.content) : file.content;
-                    return `${prefix}: ${file.filename}\nContent: ${content}`;
+                    const formattedContent = formatter(file.content);
+                    return `${prefix}: ${file.fileName || file.filename}\nContent:\n${formattedContent}`;
                 })
                 .join('\n\n');
         })
+        .filter(content => content.length > 0)
         .join('\n\n');
 }
 
@@ -133,169 +136,80 @@ async function callOpenAI(systemPrompt, userMessage) {
   }
 }
 
-// Function to convert file to base64
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = (error) => reject(error);
-  });
-}
-
-// Function to extract text from PDF using Gemini
-async function extractPdfData(file) {
-  try {
-    const base64Data = await fileToBase64(file);
-    const response = await fetch(gemini_url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        system_instruction: {
-          parts: [{ text: "Extract the text content from the provided PDF." }],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType: "application/pdf", data: base64Data } },
-            ],
-          },
-        ],
-      }),
-    });
-    const data = await response.json();
-    return data.candidates[0].content.parts[0].text;
-  } catch (error) {
-    console.error("Error extracting PDF:", error);
-    throw new Error(`Failed to extract PDF data: ${error.message}`);
-  }
-}
-
-// Function to extract data from Excel files
-async function extractExcelData(file) {
-  const workbook = XLSX.read(new Uint8Array(await file.arrayBuffer()), {
-    type: "array",
-  });
-  workbook.SheetNames.forEach((sheetName) => {
-    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-      header: 1,
-    });
-    sheetData.push({ fileName: file.name, sheetName, data: jsonData });
-  });
-  extractedData.excel.push({ fileName: file.name, content: workbook });
-  return workbook;
-}
-
-// Function to extract data from CSV files
-async function extractCsvData(file) {
-  const csvData = await file.text();
-  const workbook = XLSX.read(csvData, { type: "string" });
-  const sheetName = workbook.SheetNames[0];
-  const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
-    header: 1,
-  });
-  sheetData.push({ fileName: file.name, sheetName: "Sheet1", data: jsonData });
-  extractedData.csv.push({ fileName: file.name, content: jsonData });
-  return jsonData;
-}
-
-// Function to extract data from DOCX files
-async function extractDocxData(file) {
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const result = await mammoth.extractRawText({ arrayBuffer });
-    const docxText = result.value;
-    return docxText;
-  } catch (error) {
-    console.error("Error extracting DOCX:", error);
-    throw new Error(`Failed to extract DOCX data: ${error.message}`);
-  }
-}
-
 // Function to handle file upload
-async function handleFileUpload(files) {
-  showLoading("Processing Files...");
-  sheetData = [];
-  extractedData = { pdfs: [], excel: [], csv: [], docx: [] };
+async function handleFileUpload(selectedFiles) {
+  if (!selectedFiles || selectedFiles.length === 0) return;
+
+  // Clear existing data
+  Object.keys(extractedData).forEach(key => extractedData[key] = []);
+  sheetData.length = 0;
+
+  // Process each file
+  questionInput.disabled = true;
+  questionForm.querySelector("button").disabled = true;
+  viewAllDataBtn.classList.add("d-none");
+
+  showLoading('Processing files...');
+  let hasSpreadsheetFiles = false;
+
   try {
-    fileList.innerHTML = "";
-    let hasSpreadsheetFiles = false;
-    for (const file of files) {
-      const listItem = document.createElement("li");
-      listItem.className = "file-item mb-2 d-flex align-items-center";
-      listItem.appendChild(
-        Object.assign(document.createElement("i"), {
-          className: getFileIcon(file.name),
-        })
-      );
-      listItem.appendChild(
-        Object.assign(document.createElement("span"), {
-          className: "ms-2 me-auto",
-          textContent: file.name,
-        })
-      );
-      fileList.appendChild(listItem);
-      const ext = file.name.split(".").pop().toLowerCase();
+    for (const fileInfo of selectedFiles) {
       try {
-        if (["xlsx", "xls"].includes(ext)) {
-          await extractExcelData(file);
+        const response = await fetch(fileInfo.path);
+        if (!response.ok) throw new Error(`Failed to fetch ${fileInfo.name}`);
+        const fileData = await response.arrayBuffer();
+
+        if (fileInfo.type === 'excel') {
+          await extractExcelData(fileData, fileInfo);
           hasSpreadsheetFiles = true;
-        } else if (ext === "csv") {
-          await extractCsvData(file);
+        } else if (fileInfo.type === 'csv') {
+          await extractCsvData(fileData, fileInfo);
           hasSpreadsheetFiles = true;
-        } else if (ext === "pdf") {
-          const pdfText = await extractPdfData(file);
-          extractedData.pdfs.push({ filename: file.name, content: pdfText });
-        } else if (ext === "docx") {
-          const docxText = await extractDocxData(file);
-          extractedData.docx.push({ filename: file.name, content: docxText });
+        } else if (fileInfo.type === 'pdf') {
+          const pdfText = await extractPdfData(fileData, fileInfo);
+          extractedData.pdfs.push({ filename: fileInfo.name, content: pdfText });
+        } else if (fileInfo.type === 'docx') {
+          const docxText = await extractDocxData(fileData, fileInfo);
+          extractedData.docx.push({ filename: fileInfo.name, content: docxText });
         } else {
-          console.warn(`Unsupported file type: ${ext}`);
+          console.warn(`Unsupported file type: ${fileInfo.type}`);
         }
-        listItem.appendChild(
-          Object.assign(document.createElement("i"), {
-            className: "bi bi-check-circle-fill text-success ms-2",
-          })
-        );
       } catch (error) {
-        console.error(`Error processing file ${file.name}:`, error);
-        listItem.appendChild(
-          Object.assign(document.createElement("i"), {
-            className: "bi bi-exclamation-circle-fill text-danger ms-2",
-            title: "Error processing file",
-          })
-        );
+        console.error(`Error processing file ${fileInfo.name}:`, error);
+        showError(`Failed to process ${fileInfo.name}: ${error.message}`);
       }
     }
-    viewAllDataBtn.style.display = hasSpreadsheetFiles
-      ? "inline-block"
-      : "none";
-    fileInfo.classList.remove("hidden");
-    fileName.textContent = `${files.length} file(s) uploaded successfully`;
-    document.getElementById("questionInput").disabled = false;
-    document.querySelector("#questionForm button").disabled = false;
+
+    // Enable question input for all file types
+    questionInput.disabled = false;
+    questionForm.querySelector("button").disabled = false;
+
+    // Show data analysis features only for spreadsheet files
+    if (hasSpreadsheetFiles) {
+      viewAllDataBtn.classList.remove("d-none");
+    }
+
+    // Generate initial insights for all processed files
     await generateInitialInsights();
-    return extractedData;
+    hideLoading();
   } catch (error) {
-    console.error("Error processing files:", error);
-    showError("Error processing files. Please try again.");
-    throw error;
+    console.error('Error processing files:', error);
+    showError('Failed to process files. Please try again.');
+    hideLoading();
   }
 }
 
-// Update file input event listener
-fileInput.addEventListener("change", async (e) => {
-  if (e.target.files.length)
+// Process files button click handler
+processFilesBtn.addEventListener('click', async () => {
+  const selectedFiles = getSelectedFiles(); // This function will be provided by file-selector.js
+  if (selectedFiles.length > 0) {
     try {
-      await handleFileUpload(e.target.files);
-      hideLoading();
-    } catch (err) {
-      showError(err.message);
+      await handleFileUpload(selectedFiles);
+    } catch (error) {
+      console.error('Error processing files:', error);
+      showError('Failed to process files. Please try again.');
     }
+  }
 });
 
 // Function to show all data in modal
@@ -334,56 +248,54 @@ function displayUploadedData() {
   const table = document.getElementById("analysisResultTable");
   const tbody = table.querySelector('tbody');
 
-  sheetData.forEach((sheet, sheetIndex) => {
-    // Add file header
-    const fileHeaderRow = document.createElement('tr');
-    const fileHeaderCell = document.createElement('th');
-    fileHeaderCell.colSpan = 100;
-    fileHeaderCell.className = 'bg-light';
-    fileHeaderCell.style.padding = '10px';
-    fileHeaderCell.innerHTML = `<i class="bi bi-file-earmark-spreadsheet me-2"></i>${sheet.fileName} - ${sheet.sheetName}`;
-    fileHeaderRow.appendChild(fileHeaderCell);
-    tbody.appendChild(fileHeaderRow);
+  sheetData.forEach((fileData, fileIndex) => {
+    // For each sheet in the file
+    fileData.sheets.forEach((sheet, sheetIndex) => {
+      // Add file and sheet header
+      const fileHeaderRow = document.createElement('tr');
+      const fileHeaderCell = document.createElement('th');
+      fileHeaderCell.colSpan = 100;
+      fileHeaderCell.className = 'bg-light';
+      fileHeaderCell.style.padding = '10px';
+      fileHeaderCell.innerHTML = `<i class="bi bi-file-earmark-spreadsheet me-2"></i>${fileData.fileName} - ${sheet.sheetName}`;
+      fileHeaderRow.appendChild(fileHeaderCell);
+      tbody.appendChild(fileHeaderRow);
 
-    // Add data headers
-    if (sheet.data.length > 0) {
-      const headerRow = document.createElement('tr');
-      sheet.data[0].forEach(header => {
-        const th = document.createElement('th');
-        th.textContent = header || '';
-        th.style.padding = '10px';
-        th.style.fontWeight = 'bold';
-        headerRow.appendChild(th);
+      // Add data headers
+      if (sheet.headers && sheet.headers.length > 0) {
+        const headerRow = document.createElement('tr');
+        sheet.headers.forEach(header => {
+          const th = document.createElement('th');
+          th.textContent = header || '';
+          th.style.padding = '10px';
+          th.style.fontWeight = 'bold';
+          headerRow.appendChild(th);
+        });
+        tbody.appendChild(headerRow);
+      }
+
+      // Add data rows
+      sheet.data.forEach(row => {
+        const tr = document.createElement('tr');
+        sheet.headers.forEach(header => {
+          const td = document.createElement('td');
+          td.textContent = row[header] || '';
+          td.style.padding = '8px';
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
       });
-      tbody.appendChild(headerRow);
-    }
 
-    // Add data rows
-    sheet.data.slice(1).forEach(row => {
-      const tr = document.createElement('tr');
-      row.forEach(cell => {
-        const td = document.createElement('td');
-        td.textContent = cell || '';
-        td.style.padding = '8px';
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-
-    // Add spacing between sheets
-    if (sheetIndex < sheetData.length - 1) {
+      // Add spacing between sheets
       const spacerRow = document.createElement('tr');
       const spacerCell = document.createElement('td');
       spacerCell.colSpan = 100;
       spacerCell.style.height = '20px';
       spacerRow.appendChild(spacerCell);
       tbody.appendChild(spacerRow);
-    }
+    });
   });
-
   // Disable download buttons for uploaded data view
-  const downloadCsvBtn = document.getElementById('downloadCsv');
-  const downloadXlsxBtn = document.getElementById('downloadXlsx');
   if (downloadCsvBtn && downloadXlsxBtn) {
     downloadCsvBtn.disabled = true;
     downloadXlsxBtn.disabled = true;
@@ -797,7 +709,7 @@ function addFollowUpQuestions(questions) {
     currentQuestion = question;
     button.onclick = () => {
       questionInput.value = '';
-      processQuestion(question, true);
+      processQuestion(question);
     };
     list.appendChild(button);
   });
@@ -811,14 +723,16 @@ questionForm.addEventListener("submit", async (e) => {
   const question = questionInput.value.trim();
   questionInput.value = "";
   if (!question) return;
-  currentQuestion = question;
-  updateCurrentQuestion(question);
-  processQuestion(question, false); // Pass false to indicate it's a new question
+  await processQuestion(question); // Pass false to indicate it's a new question
 });
 
 // Process the question
- async function processQuestion(question, isFollowup = false) {
+ async function processQuestion(question) {
   try {
+    // Always update current question state in both script and mindmap handlers
+    currentQuestion = question;
+    updateCurrentQuestion(question);
+    
     addChatMessage(question, true);
     addToHistory(question, true);
     showLoading("Processing your question...");
@@ -837,28 +751,19 @@ questionForm.addEventListener("submit", async (e) => {
         let sheetInfo = "";
 
         if (extractedData.excel.length > 0) {
-          const workbook = extractedData.excel[0].content;
-          // Get all sheet names and their first few rows
-          const sheets = workbook.SheetNames.map((name) =>
-            extractSheetData(workbook, name)
-          );
-
+          const sheets = extractedData.excel[0].content; // This is already our sheet data
+          
           // Create sheet info for LLM context
           sheetInfo = `Available sheets in Excel file:
-${sheets
-  .map(
-    (sheet) => `
-Sheet: ${sheet.name}
-Columns: ${sheet.headers.join(", ")}
+${sheets.map(sheet => `
+Sheet: ${sheet.sheetName}
+Headers: ${sheet.headers.join('	')}
 Sample data (first 5 rows):
-${JSON.stringify(sheet.data.slice(0, 5), null, 2)}
-`
-  )
-  .join("\n")}`;
+${sheet.data.slice(0, 5).map(row => sheet.headers.map(h => row[h] || '').join('	')).join('\n')}`)}`;
 
           // Store full data for analysis
           analysisData = sheets.reduce((acc, sheet) => {
-            acc[sheet.name] = sheet.data;
+            acc[sheet.sheetName] = sheet.data;
             return acc;
           }, {});
         } else {
@@ -1071,7 +976,7 @@ window.processQuestion = async (question) => {
     questionInput.disabled = true;
     showLoading("Processing your question...");
     
-    await processQuestion(question, false);
+    await processQuestion(question);
   } catch (error) {
     console.error('Error processing question:', error);
     showError('Failed to process question');
@@ -1257,28 +1162,6 @@ async function generatePythonAnalysisCode(question, data) {
     console.error("Failed to generate Python code:", error);
     throw error;
   }
-}
-
-// Function to extract data from Excel/CSV files
-function extractSheetData(workbook, sheetName) {
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, {
-    header: "A",
-    raw: true,
-    blankrows: false,
-  });
-  const headers = Object.values(rows[0]);
-  return {
-    name: sheetName,
-    headers,
-    data: rows
-      .slice(1)
-      .map((row) =>
-        Object.fromEntries(
-          Object.entries(row).map(([_, v], i) => [headers[i], v])
-        )
-      ),
-  };
 }
 
 // Function to format analysis results using LLM

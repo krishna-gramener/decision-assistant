@@ -222,8 +222,8 @@ function handleContainerClick(e) {
         }
 
         if (!currentQuestion) {
-            showError('No current question context available');
-            return;
+            console.warn('No current question context, using node text as base question');
+            currentQuestion = nodeText;
         }
 
         generateRelatedQuestion(nodeText, currentQuestion)

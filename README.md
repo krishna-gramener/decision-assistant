@@ -43,7 +43,7 @@ An intelligent web application that enhances decision-making through expert anal
 
 ### Usage
 1. Configure API settings
-2. Upload relevant clinical data files
+2. Upload relevant data files
 3. Enter your question or decision topic
 4. Review expert analyses and insights
 5. Explore the interactive mindmap

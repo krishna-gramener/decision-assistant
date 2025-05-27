@@ -1,0 +1,16 @@
+{
+  "files": [
+    {
+      "id": "cgii_table",
+      "name": "CGII Table",
+      "path": "data/CGII-Table-2.xlsx",
+      "type": "excel"
+    },
+    {
+      "id": "med_report",
+      "name": "Medical Report",
+      "path": "data/med.pdf",
+      "type": "pdf"
+    }
+  ]
+}
