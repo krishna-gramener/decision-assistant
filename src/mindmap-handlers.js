@@ -1,4 +1,4 @@
-import { callOpenAI,showError,generateRelatedQuestion,processQuestion } from './script.js';
+import { callOpenAI,showError,generateRelatedQuestion,processQuestion } from '../script.js';
 
 // Store DOM elements and state
 let elements = {

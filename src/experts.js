@@ -1,4 +1,4 @@
-import { showLoading, callOpenAI, formatExtractedData, getConversationContext } from './script.js';
+import { showLoading, callOpenAI, formatExtractedData, getConversationContext } from '../script.js';
 
 // Store current experts data
 let currentExpertsData = [];

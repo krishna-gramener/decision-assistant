@@ -1,9 +1,9 @@
 import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm"
-import { openai_url, token, setupAPI} from './api-config.js';
-import { initializeMindmap, generateFinalmapData, generateExpertMindmapWithLLM, updateMindmapData, updateCurrentQuestion } from './mindmap-handlers.js';
-import { getExperts, generateExpertQuestions, getExpertAnswers, generateExpertSummary, generateFinalAnswer, updateExpertsData } from './experts.js';
-import { loadAvailableFiles, renderFileButtons, getSelectedFiles } from './file-selector.js';
-import { extractPdfData, extractExcelData, extractCsvData, extractDocxData, extractedData, sheetData } from './file-extractors.js';
+import { openai_url, token, setupAPI} from './src/api-config.js';
+import { initializeMindmap, generateFinalmapData, generateExpertMindmapWithLLM, updateMindmapData, updateCurrentQuestion } from './src/mindmap-handlers.js';
+import { getExperts, generateExpertQuestions, getExpertAnswers, generateExpertSummary, generateFinalAnswer, updateExpertsData } from './src/experts.js';
+import { loadAvailableFiles, renderFileButtons, getSelectedFiles } from './src/file-selector.js';
+import { extractPdfData, extractExcelData, extractCsvData, extractDocxData, extractedData, sheetData } from './src/file-extractors.js';
 
 const pyodideWorker = new Worker("./pyworker.js", { type: "module" });
 const marked = new Marked();

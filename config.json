@@ -1,16 +1,16 @@
 {
   "files": [
     {
-      "id": "cgii_table",
-      "name": "CGII Table",
-      "path": "data/CGII-Table-2.xlsx",
-      "type": "excel"
-    },
-    {
       "id": "med_report",
-      "name": "Medical Report",
+      "name": "Report: Placebo vs Trof",
       "path": "data/med.pdf",
       "type": "pdf"
+    },
+    {
+      "id": "placebo",
+      "name": "Placebo Dose Report",
+      "path": "data/placebo.xlsx",
+      "type": "excel"
     }
   ]
 }
