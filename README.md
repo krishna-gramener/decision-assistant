@@ -156,3 +156,5 @@ This project is licensed under the MIT License.
 ## Support
 
 For API configuration and usage questions, refer to the documentation or open an issue in the repository.
+
+**Note:** This is a demo. It contains no confidential data/IP.
